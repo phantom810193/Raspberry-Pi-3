@@ -1,0 +1,41 @@
+name: Cam FPS (Sim) Test
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  cam-sim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps (headless OK)
+        run: |
+          python -m pip install --upgrade pip
+          # 對 CI 來說，只需最小依賴即可：numpy + opencv-headless
+          pip install numpy opencv-python-headless
+      - name: Run simulated FPS test
+        env:
+          RUN_SECS: 20
+        run: |
+          python scripts/cam3_fps_sim.py
+          tail -n 5 logs/cam3.log
+      - name: Enforce >= 8 FPS
+        run: |
+          AVG=$(grep -Eo 'avg_fps=[0-9.]*' logs/cam3.log | tail -n1 | cut -d= -f2)
+          echo "avg_fps=$AVG"
+          python - <<'PY'
+import os, sys
+avg=float(open("logs/cam3.log","r",encoding="utf-8").read().split("avg_fps=")[-1].split()[0])
+assert avg>=8.0, f"Avg FPS {avg:.2f} < 8"
+print("PASS: avg_fps >= 8")
+PY
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: cam-logs
+          path: logs/*.log
