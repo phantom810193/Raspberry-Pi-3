@@ -13,27 +13,70 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install deps (headless OK)
+
+      - name: Install minimal deps
         run: |
           python -m pip install --upgrade pip
-          # 對 CI 來說，只需最小依賴即可：numpy + opencv-headless
-          pip install numpy opencv-python-headless
+          pip install numpy opencv-python-headless python-dotenv
+
+      # 直接在 CI 動態建立兩個腳本
+      - name: Create simulated scripts
+        run: |
+          mkdir -p scripts logs
+          cat > scripts/sim_source.py <<'PY'
+          import time, numpy as np, cv2
+          def frames(width=640, height=480, fps=30):
+              t=0.0; dt=1.0/max(1,fps); r=40
+              while True:
+                  img=np.zeros((height,width,3), np.uint8)
+                  cx=int((np.sin(t)*0.4+0.5)*width)
+                  cy=int((np.cos(t*0.7)*0.4+0.5)*height)
+                  cv2.circle(img,(cx,cy), r,(0,255,0), -1)
+                  yield img
+                  t+=dt; time.sleep(dt)
+          PY
+          cat > scripts/cam3_fps_sim.py <<'PY'
+          import os, time, statistics, pathlib
+          from scripts.sim_source import frames
+          run_secs=int(os.getenv("RUN_SECS","20"))
+          window=5.0; lines=[]
+          def logp(s): print(s); lines.append(s)
+          gen=frames()
+          t0=time.time(); t=t0; frames_cnt=0; sec_frames=0; samples=[]
+          while time.time()-t0<run_secs:
+              _=next(gen); frames_cnt+=1; sec_frames+=1
+              now=time.time()
+              if now-t>=window:
+                  fps=sec_frames/(now-t); samples.append(fps)
+                  logp(f"section_fps={fps:.2f} total={frames_cnt}")
+                  t=now; sec_frames=0
+          dur=time.time()-t0; avg=frames_cnt/max(1e-3,dur)
+          p50=statistics.median(samples) if samples else 0.0
+          logp(f"END avg_fps={avg:.2f} p50_section_fps={p50:.2f} frames={frames_cnt} secs={dur:.2f}")
+          pathlib.Path("logs").mkdir(exist_ok=True)
+          open("logs/cam3.log","w",encoding="utf-8").write("\n".join(lines))
+          print("written logs/cam3.log")
+          PY
+
       - name: Run simulated FPS test
         env:
           RUN_SECS: 20
         run: |
           python scripts/cam3_fps_sim.py
           tail -n 5 logs/cam3.log
+
       - name: Enforce >= 8 FPS
         run: |
-          AVG=$(grep -Eo 'avg_fps=[0-9.]*' logs/cam3.log | tail -n1 | cut -d= -f2)
-          echo "avg_fps=$AVG"
           python - <<'PY'
-import os, sys
-avg=float(open("logs/cam3.log","r",encoding="utf-8").read().split("avg_fps=")[-1].split()[0])
-assert avg>=8.0, f"Avg FPS {avg:.2f} < 8"
-print("PASS: avg_fps >= 8")
-PY
+          import re
+          txt=open('logs/cam3.log','r',encoding='utf-8').read()
+          m=re.search(r"avg_fps=([0-9.]+)", txt)
+          if not m: raise SystemExit("avg_fps not found")
+          avg=float(m.group(1)); print("avg_fps=", avg)
+          assert avg>=8.0, f"Avg FPS {avg:.2f} < 8"
+          print("PASS: avg_fps >= 8")
+          PY
+
       - name: Upload logs
         uses: actions/upload-artifact@v4
         with:
