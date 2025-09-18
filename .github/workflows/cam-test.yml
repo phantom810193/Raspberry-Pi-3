@@ -62,8 +62,8 @@ jobs:
         env:
           RUN_SECS: 20
         run: |
-          python scripts/cam3_fps_sim.py
-          tail -n 5 logs/cam3.log
+          python -m scripts.cam3_fps_sim
+          tail -n 10 logs/cam3.log || true   
 
       - name: Enforce >= 8 FPS
         run: |
